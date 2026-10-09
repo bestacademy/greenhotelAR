@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Green Hotel SMK Pariwisata AR Adventure</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            overflow: hidden;
+            background-color: #000;
+            touch-action: none;
+        }
+        
+        /* Video background setup for AR effect */
+        #webcam-video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect */
+            z-index: 1;
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2;
+            pointer-events: none; /* Let clicks pass through if needed, though we use hand tracking */
+        }
+
+        /* UI Overlays */
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .interactive {
+            pointer-events: auto;
+        }
+
+        /* Floating Balloon Labels */
+        .balloon-label {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 15px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+            color: #065f46;
+            text-align: center;
+            max-width: 150px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 2px solid #10b981;
+            z-index: 5;
+            transition: opacity 0.3s;
+            pointer-events: none; /* Handled by 3D raycaster */
+        }
+
+        /* Hand Cursor */
+        #hand-cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background-color: rgba(16, 185, 129, 0.5);
+            border: 3px solid #10b981;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            pointer-events: none;
+            display: none;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        
+        #hand-cursor.pointing {
+            background-color: rgba(239, 68, 68, 0.8); /* Red when pointing/ready to pop */
+            border-color: #ef4444;
+            transform: translate(-50%, -50%) scale(0.8);
+        }
+
+        .wood-panel {
+            background-image: linear-gradient(45deg, #8B4513 25%, #A0522D 25%, #A0522D 50%, #8B4513 50%, #8B4513 75%, #A0522D 75%, #A0522D 100%);
+            background-size: 40px 40px;
+            border: 4px solid #5C3A21;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.5);
+        }
+
+        /* Particle effect canvas for popping */
+        #particle-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 6;
+            pointer-events: none;
+        }
+        
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <!-- Media Inputs -->
+    <video id="webcam-video" autoplay playsinline></video>
+    <canvas id="game-canvas"></canvas>
+    <canvas id="particle-canvas"></canvas>
+
+    <!-- Hand Cursor visualizer -->
+    <div id="hand-cursor"></div>
+
+    <!-- UI Layer -->
+    <div class="ui-layer flex flex-col justify-between">
+        
+        <!-- Top Bar: Score & Progress (Hidden initially) -->
+        <div id="top-bar" class="hidden interactive flex justify-between p-4 w-full">
+            <div class="glass-panel px-6 py-2 rounded-full shadow-lg flex items-center gap-3 border-emerald-500 border-2">
+                <span class="text-emerald-700 font-bold text-xl">SKOR:</span>
+                <span id="score-display" class="text-3xl font-extrabold text-emerald-600">0</span>
+            </div>
+            <div class="glass-panel px-6 py-2 rounded-full shadow-lg flex items-center gap-3 border-blue-500 border-2">
+                <span class="text-blue-700 font-bold text-lg">Soal:</span>
+                <span id="progress-display" class="text-2xl font-extrabold text-blue-600">1/5</span>
+            </div>
+        </div>
+
+        <!-- Middle Area: Menus and Panels -->
+        <div class="flex-1 flex items-center justify-center relative">
+            
+            <!-- Opening Scene -->
+            <div id="start-screen" class="interactive bg-white/95 p-8 rounded-3xl shadow-2xl max-w-2xl text-center border-4 border-emerald-500 fade-in">
+                <div class="flex justify-center mb-4">
+                    <svg class="w-24 h-24 text-emerald-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"></path></svg>
+                </div>
+                <h1 class="text-4xl font-extrabold text-emerald-800 mb-2">GREEN HOTEL</h1>
+                <h2 class="text-xl font-bold text-amber-600 mb-6">SMK Pariwisata AR Adventure</h2>
+                <p class="text-gray-600 mb-6 text-sm">Selamatkan lingkungan melalui praktik Hospitality yang Eco-friendly!</p>
+                
+                <div class="grid grid-cols-2 gap-4 mb-8 text-left bg-emerald-50 p-4 rounded-xl border border-emerald-200">
+                    <div class="flex items-center gap-2">
+                        <span class="text-2xl">🖐️</span> <span class="text-sm font-semibold">Tangan Terbuka:<br>Mulai Game</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-2xl">☝️</span> <span class="text-sm font-semibold">Telunjuk:<br>Pilih/Pecahkan Balon</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-2xl">✊</span> <span class="text-sm font-semibold">Mengepal:<br>Pause Game</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs text-emerald-700 italic">
+                        Pastikan tangan terlihat di kamera!
+                    </div>
+                </div>
+                
+                <button id="btn-start" class="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95">
+                    MULAI PETUALANGAN
+                </button>
+                <p class="mt-4 text-xs text-gray-500 font-bold" id="cam-status">Menyiapkan Kamera...</p>
+            </div>
+
+            <!-- Question Panel (Hidden initially) -->
+            <div id="question-panel" class="hidden absolute top-10 w-11/12 max-w-3xl glass-panel p-6 rounded-2xl shadow-2xl border-b-4 border-emerald-500 fade-in transition-all duration-300">
+                <h3 class="text-emerald-800 font-bold text-lg mb-2 flex items-center gap-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Pertanyaan:
+                </h3>
+                <p id="question-text" class="text-gray-800 text-xl font-semibold leading-relaxed"></p>
+                <div class="mt-2 text-sm text-amber-700 font-bold animate-pulse">Arahkan telunjuk ke balon jawaban!</div>
+            </div>
+
+            <!-- Explanation Panel (Hidden initially) -->
+            <div id="explanation-panel" class="hidden interactive absolute bg-white p-6 rounded-2xl shadow-2xl max-w-lg border-4 text-center z-50 fade-in">
+                <h3 id="result-title" class="text-3xl font-black mb-2">BENAR!</h3>
+                <p id="explanation-text" class="text-gray-700 text-md mb-6 font-medium"></p>
+                <button id="btn-next" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-md transition transform hover:scale-105">
+                    Lanjut Soal Berikutnya
+                </button>
+            </div>
+
+            <!-- Pause Screen -->
+            <div id="pause-screen" class="hidden interactive bg-white/90 p-8 rounded-3xl shadow-2xl text-center border-4 border-amber-500 fade-in">
+                <h2 class="text-4xl font-extrabold text-amber-600 mb-4">GAME PAUSED</h2>
+                <p class="text-gray-600 mb-6">Buka tangan Anda (Open Hand) atau klik tombol untuk melanjutkan.</p>
+                <button id="btn-resume" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-8 rounded-full shadow-md">
+                    LANJUTKAN
+                </button>
+            </div>
+
+            <!-- End Screen -->
+            <div id="end-screen" class="hidden interactive bg-white/95 p-8 rounded-3xl shadow-2xl max-w-xl text-center border-4 border-emerald-600 fade-in">
+                <h2 class="text-4xl font-extrabold text-emerald-800 mb-2">HASIL AKHIR</h2>
+                <h3 class="text-xl font-bold text-gray-600 mb-6">Green Hotel Adventure</h3>
+                
+                <div class="flex justify-center gap-8 mb-6">
+                    <div class="bg-emerald-100 p-4 rounded-xl border border-emerald-300">
+                        <p class="text-sm text-emerald-700 font-bold">Benar</p>
+                        <p id="final-correct" class="text-3xl font-black text-emerald-600">0</p>
+                    </div>
+                    <div class="bg-red-100 p-4 rounded-xl border border-red-300">
+                        <p class="text-sm text-red-700 font-bold">Salah</p>
+                        <p id="final-wrong" class="text-3xl font-black text-red-600">0</p>
+                    </div>
+                </div>
+
+                <div class="bg-gradient-to-r from-emerald-500 to-green-600 text-white p-4 rounded-2xl mb-6 shadow-inner">
+                    <p class="text-lg">Total Skor Anda:</p>
+                    <p id="final-score" class="text-6xl font-black drop-shadow-md">0</p>
+                </div>
+
+                <p id="motivation-msg" class="text-lg font-bold text-amber-600 mb-8 italic">
+                    "Luar biasa! Kamu siap menjadi pahlawan lingkungan di industri perhotelan!"
+                </p>
+
+                <button onclick="location.reload()" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-full shadow-md transition transform hover:scale-105">
+                    Main Lagi
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Container for dynamic HTML labels that track 3D objects -->
+    <div id="labels-container" class="ui-layer"></div>
+
+    <script>
+        // --- GAME DATA ---
+        const questionsData = [
+            {
+                question: 'Apa tujuan utama dari penerapan konsep "Green Hotel" di industri pariwisata?',
+                options: [
+                    { text: 'Meningkatkan jumlah karyawan hotel', isCorrect: false },
+                    { text: 'Meminimalkan dampak negatif terhadap lingkungan', isCorrect: true },
+                    { text: 'Memperbesar ukuran bangunan hotel', isCorrect: false },
+                    { text: 'Membuang limbah langsung ke laut', isCorrect: false }
+                ],
+                explanation: 'Green Hotel bertujuan untuk meminimalkan jejak karbon dan menjaga kelestarian lingkungan melalui operasional hotel yang berkelanjutan.'
+            },
+            {
+                question: 'Salah satu tindakan konservasi energi (energy conservation) di kamar tamu adalah...',
+                options: [
+                    { text: 'Menyalakan AC 24 jam penuh saat kamar kosong', isCorrect: false },
+                    { text: 'Menggunakan lampu pijar tradisional', isCorrect: false },
+                    { text: 'Membiarkan televisi menyala sebagai penyambut tamu', isCorrect: false },
+                    { text: 'Menggunakan sistem kartu kunci (key card) untuk memutus arus listrik', isCorrect: true }
+                ],
+                explanation: 'Sistem key card secara otomatis memutus arus listrik saat tamu meninggalkan kamar, sehingga sangat menghemat energi.'
+            },
+            {
+                question: 'Praktik pengelolaan limbah (waste management) yang tepat untuk sisa makanan dari dapur hotel adalah...',
+                options: [
+                    { text: 'Membuat kompos dari sisa makanan organik', isCorrect: true },
+                    { text: 'Membakar sampah plastik dan sisa makanan di halaman', isCorrect: false },
+                    { text: 'Membuang semua sampah ke saluran air', isCorrect: false },
+                    { text: 'Mencampur sampah organik dan anorganik dalam satu tempat', isCorrect: false }
+                ],
+                explanation: 'Sisa makanan organik dapat diolah menjadi kompos yang berguna untuk menyuburkan taman hotel, sekaligus mengurangi limbah ke TPA.'
+            },
+            {
+                question: 'Bagaimana cara sebuah hotel menerapkan "Water Conservation" (konservasi air)?',
+                options: [
+                    { text: 'Mengganti seprai dan handuk setiap hari meskipun tamu tidak meminta', isCorrect: false },
+                    { text: 'Memasang shower dan toilet aliran rendah (low-flow)', isCorrect: true },
+                    { text: 'Mencuci piring di bawah air yang mengalir terus-menerus', isCorrect: false },
+                    { text: 'Membiarkan keran bocor menetes', isCorrect: false }
+                ],
+                explanation: 'Alat beraliran rendah mengurangi volume debit air tanpa mengorbankan kenyamanan, sehingga dapat menghemat ribuan liter air.'
+            },
+            {
+                question: 'Penggunaan produk pembersih housekeeping berlabel "Eco-Friendly" sangat disarankan karena...',
+                options: [
+                    { text: 'Harganya selalu lebih murah dari pembersih biasa', isCorrect: false },
+                    { text: 'Hanya bisa digunakan untuk membersihkan kaca', isCorrect: false },
+                    { text: 'Bebas dari bahan kimia beracun dan mudah terurai (biodegradable)', isCorrect: true },
+                    { text: 'Aromanya lebih menyengat dan bertahan berhari-hari', isCorrect: false }
+                ],
+                explanation: 'Pembersih ramah lingkungan tidak merusak ekosistem air dan tanah saat sisa air cucian dibuang ke saluran pembuangan.'
+            }
+        ];
+
+        // --- STATE VARIABLES ---
+        let gameState = 'init'; // init, playing, paused, explanation, end
+        let currentQuestionIndex = 0;
+        let score = 0;
+        let correctAnswers = 0;
+        let wrongAnswers = 0;
+        let isCameraReady = false;
+
+        // UI Elements
+        const elStartScreen = document.getElementById('start-screen');
+        const elTopBar = document.getElementById('top-bar');
+        const elQuestionPanel = document.getElementById('question-panel');
+        const elQuestionText = document.getElementById('question-text');
+        const elExplanationPanel = document.getElementById('explanation-panel');
+        const elResultTitle = document.getElementById('result-title');
+        const elExplanationText = document.getElementById('explanation-text');
+        const elPauseScreen = document.getElementById('pause-screen');
+        const elEndScreen = document.getElementById('end-screen');
+        const elScore = document.getElementById('score-display');
+        const elProgress = document.getElementById('progress-display');
+        const elHandCursor = document.getElementById('hand-cursor');
+        const elLabelsContainer = document.getElementById('labels-container');
+        const btnStart = document.getElementById('btn-start');
+
+        // ThreeJS variables
+        let scene, camera, renderer;
+        let balloons = [];
+        let decorativeObjects = [];
+        const raycaster = new THREE.Raycaster();
+        let lastTime = 0;
+
+        // Audio Context (Synthesized sounds)
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+
+        // Hand tracking state
+        let currentGesture = 'none'; // open, pointing, fist, none
+        let handPosition = { x: -100, y: -100 }; // Screen coordinates
+
+        function initAudio() {
+            if (!audioCtx) audioCtx = new AudioContext();
+        }
+
+        function playPopSound() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function playDingSound() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        }
+
+        function playBuzzSound() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function initThreeJS() {
+            const canvas = document.getElementById('game-canvas');
+            scene = new THREE.Scene();
+            // Transparent background to show webcam
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 10;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            scene.add(dirLight);
+
+            createDecorativeEnvironment();
+
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // Start render loop
+            requestAnimationFrame(animate);
+        }
+
+        function createDecorativeEnvironment() {
+            // 1. Simple Green Hotel Building (Left)
+            const hotelGroup = new THREE.Group();
+            
+            // Main building
+            const buildingGeo = new THREE.BoxGeometry(2, 5, 2);
+            const buildingMat = new THREE.MeshLambertMaterial({ color: 0xeeeeee });
+            const building = new THREE.Mesh(buildingGeo, buildingMat);
+            hotelGroup.add(building);
+            
+            // Solar Panel on roof
+            const panelGeo = new THREE.BoxGeometry(1.8, 0.1, 1.8);
+            const panelMat = new THREE.MeshLambertMaterial({ color: 0x1e3a8a }); // Dark blue
+            const panel = new THREE.Mesh(panelGeo, panelMat);
+            panel.position.y = 2.55;
+            panel.rotation.x = Math.PI / 12; // tilted
+            hotelGroup.add(panel);
+
+            // Green roof details
+            const grassRoofGeo = new THREE.BoxGeometry(2.1, 0.2, 2.1);
+            const grassRoofMat = new THREE.MeshLambertMaterial({ color: 0x10b981 });
+            const grassRoof = new THREE.Mesh(grassRoofGeo, grassRoofMat);
+            grassRoof.position.y = 2.4;
+            hotelGroup.add(grassRoof);
+
+            hotelGroup.position.set(-6, -2, -5);
+            hotelGroup.rotation.y = Math.PI / 6;
+            scene.add(hotelGroup);
+            decorativeObjects.push({mesh: hotelGroup, rotSpeed: 0.005, floatY: -2});
+
+            // 2. Recycling Bins (Right)
+            const binsGroup = new THREE.Group();
+            
+            const binGeo = new THREE.CylinderGeometry(0.5, 0.4, 1.5, 16);
+            
+            // Organic Bin (Green)
+            const orgBinMat = new THREE.MeshLambertMaterial({ color: 0x10b981 });
+            const orgBin = new THREE.Mesh(binGeo, orgBinMat);
+            orgBin.position.x = -0.8;
+            binsGroup.add(orgBin);
+            
+            // Inorganic Bin (Blue)
+            const inorgBinMat = new THREE.MeshLambertMaterial({ color: 0x3b82f6 });
+            const inorgBin = new THREE.Mesh(binGeo, inorgBinMat);
+            inorgBin.position.x = 0.8;
+            binsGroup.add(inorgBin);
+
+            binsGroup.position.set(6, -3, -4);
+            scene.add(binsGroup);
+            decorativeObjects.push({mesh: binsGroup, rotSpeed: -0.01, floatY: -3});
+
+            // 3. Floating Water Drop & Leaves
+            const ecoGroup = new THREE.Group();
+            
+            // Water Drop
+            const dropGeo = new THREE.ConeGeometry(0.3, 0.8, 16);
+            dropGeo.translate(0, 0.4, 0); // shift origin
+            const dropSphereGeo = new THREE.SphereGeometry(0.3, 16, 16);
+            const dropMat = new THREE.MeshLambertMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.8 });
+            const dropCone = new THREE.Mesh(dropGeo, dropMat);
+            const dropSphere = new THREE.Mesh(dropSphereGeo, dropMat);
+            const drop = new THREE.Group();
+            drop.add(dropCone);
+            drop.add(dropSphere);
+            drop.position.set(-2, 3, -3);
+            ecoGroup.add(drop);
+
+            // Leaf
+            const leafGeo = new THREE.SphereGeometry(0.4, 16, 16);
+            leafGeo.scale(1, 1.5, 0.1);
+            const leafMat = new THREE.MeshLambertMaterial({ color: 0x84cc16 });
+            const leaf = new THREE.Mesh(leafGeo, leafMat);
+            leaf.position.set(2, 4, -4);
+            leaf.rotation.z = Math.PI / 4;
+            ecoGroup.add(leaf);
+
+            scene.add(ecoGroup);
+            decorativeObjects.push({mesh: ecoGroup, rotSpeed: 0.02, floatY: 0});
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function initMediaPipe() {
+            const videoElement = document.getElementById('webcam-video');
+            
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 1, // Focus on one hand for easier control
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+            
+            hands.onResults(onHandResults);
+            
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+            
+            cameraUtils.start().then(() => {
+                isCameraReady = true;
+                document.getElementById('cam-status').innerText = "Kamera Siap! Gunakan gesture tangan.";
+                document.getElementById('cam-status').classList.replace('text-gray-500', 'text-emerald-500');
+            }).catch(err => {
+                document.getElementById('cam-status').innerText = "Gagal mengakses kamera. Mohon izinkan akses.";
+                document.getElementById('cam-status').classList.replace('text-gray-500', 'text-red-500');
+                console.error(err);
+            });
+        }
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Track Index Finger Tip (Landmark 8) for cursor
+                const indexTip = landmarks[8];
+                // Mirror mapping: webcam is mirrored, so X needs inversion relative to view
+                const screenX = (1 - indexTip.x) * window.innerWidth; 
+                const screenY = indexTip.y * window.innerHeight;
+                
+                handPosition.x = screenX;
+                handPosition.y = screenY;
+
+                // Update Visual Cursor
+                elHandCursor.style.display = 'block';
+                elHandCursor.style.left = `${screenX}px`;
+                elHandCursor.style.top = `${screenY}px`;
+
+                // Gesture Recognition Heuristics
+                detectGesture(landmarks);
+            } else {
+                elHandCursor.style.display = 'none';
+                currentGesture = 'none';
+            }
+        }
+
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2));
+        }
+
+        function detectGesture(landmarks) {
+            const wrist = landmarks[0];
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // Calculate distances from wrist to tips
+            const dThumb = getDistance(wrist, thumbTip);
+            const dIndex = getDistance(wrist, indexTip);
+            const dMiddle = getDistance(wrist, middleTip);
+            const dRing = getDistance(wrist, ringTip);
+            const dPinky = getDistance(wrist, pinkyTip);
+
+            // Simple thresholds (normalized coordinates)
+            const OPEN_THRESHOLD = 0.4;
+            const CLOSED_THRESHOLD = 0.2;
+
+            const isIndexOpen = dIndex > OPEN_THRESHOLD;
+            const isMiddleClosed = dMiddle < CLOSED_THRESHOLD * 1.5; // Looser threshold for others
+            const isRingClosed = dRing < CLOSED_THRESHOLD * 1.5;
+            const isPinkyClosed = dPinky < CLOSED_THRESHOLD * 1.5;
+            
+            const areAllOpen = dThumb > OPEN_THRESHOLD * 0.8 && dIndex > OPEN_THRESHOLD && dMiddle > OPEN_THRESHOLD && dRing > OPEN_THRESHOLD;
+            const areAllClosed = dIndex < CLOSED_THRESHOLD * 2 && dMiddle < CLOSED_THRESHOLD * 2 && dRing < CLOSED_THRESHOLD * 2 && dPinky < CLOSED_THRESHOLD * 2;
+
+            let prevGesture = currentGesture;
+
+            if (areAllClosed) {
+                currentGesture = 'fist';
+                elHandCursor.className = '';
+            } else if (areAllOpen) {
+                currentGesture = 'open';
+                elHandCursor.className = '';
+            } else if (isIndexOpen && isMiddleClosed && isRingClosed) {
+                currentGesture = 'pointing';
+                elHandCursor.className = 'pointing';
+            } else {
+                // Check pinch (optional, fallback to pointing for interactions in this game)
+                const pinchDist = getDistance(thumbTip, indexTip);
+                if (pinchDist < 0.1) {
+                    currentGesture = 'pinch';
+                    elHandCursor.className = 'pointing'; // Treat pinch visually similar to pointing for interaction
+                } else {
+                    currentGesture = 'none';
+                    elHandCursor.className = '';
+                }
+            }
+
+            // Handle Gesture Actions based on Game State
+            if (prevGesture !== currentGesture) {
+                handleGestureAction();
+            }
+        }
+
+        function handleGestureAction() {
+            if (currentGesture === 'open' && gameState === 'init') {
+                startGame();
+            }
+            
+            if (currentGesture === 'fist' && gameState === 'playing') {
+                pauseGame();
+            }
+
+            if (currentGesture === 'open' && gameState === 'paused') {
+                resumeGame();
+            }
+        }
+
+        function startGame() {
+            if(!isCameraReady) return;
+            initAudio();
+            gameState = 'playing';
+            currentQuestionIndex = 0;
+            score = 0;
+            correctAnswers = 0;
+            wrongAnswers = 0;
+            
+            updateScoreDisplay();
+            
+            elStartScreen.classList.add('hidden');
+            elEndScreen.classList.add('hidden');
+            elTopBar.classList.remove('hidden');
+            
+            loadQuestion(currentQuestionIndex);
+        }
+
+        function pauseGame() {
+            gameState = 'paused';
+            elPauseScreen.classList.remove('hidden');
+            // Hide balloons temporarily
+            balloons.forEach(b => { b.mesh.visible = false; b.label.style.display = 'none'; });
+        }
+
+        function resumeGame() {
+            gameState = 'playing';
+            elPauseScreen.classList.add('hidden');
+            // Show balloons
+            balloons.forEach(b => { b.mesh.visible = true; b.label.style.display = 'block'; });
+        }
+
+        function loadQuestion(index) {
+            if (index >= questionsData.length) {
+                endGame();
+                return;
+            }
+
+            const q = questionsData[index];
+            elProgress.innerText = `${index + 1}/${questionsData.length}`;
+            elQuestionText.innerText = q.question;
+            elQuestionPanel.classList.remove('hidden');
+            
+            // Clear existing balloons
+            clearBalloons();
+
+            // Spawn new balloons
+            const colors = [0xf43f5e, 0x3b82f6, 0xeab308, 0xa855f7]; // Red, Blue, Yellow, Purple
+            const positions = [
+                {x: -4, z: -5}, {x: -1.5, z: -6}, {x: 1.5, z: -6}, {x: 4, z: -5}
+            ];
+
+            // Shuffle options for randomness
+            let options = [...q.options];
+            for (let i = options.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [options[i], options[j]] = [options[j], options[i]];
+            }
+
+            for (let i = 0; i < 4; i++) {
+                createBalloon(options[i], colors[i], positions[i]);
+            }
+        }
+
+        function createBalloon(optionData, colorHex, pos) {
+            // 3D Mesh
+            const geometry = new THREE.SphereGeometry(1.2, 32, 32);
+            // Add a little bottom knot
+            const knotGeo = new THREE.ConeGeometry(0.3, 0.4, 16);
+            knotGeo.translate(0, -1.2, 0);
+            
+            const material = new THREE.MeshPhongMaterial({ 
+                color: colorHex, 
+                shininess: 100,
+                transparent: true,
+                opacity: 0.9
+            });
+            
+            const balloonGroup = new THREE.Group();
+            const sphere = new THREE.Mesh(geometry, material);
+            const knot = new THREE.Mesh(knotGeo, material);
+            balloonGroup.add(sphere);
+            balloonGroup.add(knot);
+
+            // Starting position (bottom of screen)
+            balloonGroup.position.set(pos.x, -5 - Math.random() * 2, pos.z);
+            scene.add(balloonGroup);
+
+            // HTML Label
+            const label = document.createElement('div');
+            label.className = 'balloon-label';
+            label.innerText = optionData.text;
+            elLabelsContainer.appendChild(label);
+
+            balloons.push({
+                mesh: balloonGroup,
+                label: label,
+                data: optionData,
+                speedY: 0.02 + Math.random() * 0.02,
+                wobbleSpeed: 2 + Math.random() * 2,
+                wobbleOffset: Math.random() * Math.PI * 2,
+                baseX: pos.x
+            });
+        }
+
+        function clearBalloons() {
+            balloons.forEach(b => {
+                scene.remove(b.mesh);
+                if(b.label && b.label.parentNode) {
+                    b.label.parentNode.removeChild(b.label);
+                }
+            });
+            balloons = [];
+        }
+
+        function checkCollisions() {
+            if (gameState !== 'playing' || (currentGesture !== 'pointing' && currentGesture !== 'pinch')) return;
+
+            // Convert screen hand position to normalized device coordinates (-1 to +1) for raycasting
+            const mouse = new THREE.Vector2();
+            mouse.x = (handPosition.x / window.innerWidth) * 2 - 1;
+            mouse.y = -(handPosition.y / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            // Create array of just the meshes to check
+            const meshesToCheck = balloons.map(b => b.mesh.children[0]); // Check against the sphere part
+
+            const intersects = raycaster.intersectObjects(meshesToCheck);
+
+            if (intersects.length > 0) {
+                // Find which balloon object owns this mesh
+                const hitMesh = intersects[0].object.parent; 
+                const balloonIndex = balloons.findIndex(b => b.mesh === hitMesh);
+                
+                if (balloonIndex !== -1) {
+                    popBalloon(balloonIndex);
+                }
+            }
+        }
+
+        function popBalloon(index) {
+            const poppedBalloon = balloons[index];
+            const isCorrect = poppedBalloon.data.isCorrect;
+            const pos = poppedBalloon.mesh.position.clone();
+
+            playPopSound();
+            createExplosion(pos, poppedBalloon.mesh.children[0].material.color);
+
+            if (isCorrect) {
+                playDingSound();
+                score += 10;
+                correctAnswers++;
+                showFeedback(true, questionsData[currentQuestionIndex].explanation);
+            } else {
+                playBuzzSound();
+                wrongAnswers++;
+                showFeedback(false, questionsData[currentQuestionIndex].explanation);
+            }
+
+            updateScoreDisplay();
+            clearBalloons(); // Remove all balloons
+            elQuestionPanel.classList.add('hidden');
+            gameState = 'explanation';
+        }
+
+        function showFeedback(isCorrect, text) {
+            elExplanationPanel.classList.remove('hidden');
+            
+            if (isCorrect) {
+                elExplanationPanel.classList.remove('border-red-500');
+                elExplanationPanel.classList.add('border-emerald-500');
+                elResultTitle.innerText = "BENAR! +10";
+                elResultTitle.className = "text-3xl font-black mb-2 text-emerald-600";
+            } else {
+                elExplanationPanel.classList.remove('border-emerald-500');
+                elExplanationPanel.classList.add('border-red-500');
+                elResultTitle.innerText = "KURANG TEPAT";
+                elResultTitle.className = "text-3xl font-black mb-2 text-red-600";
+            }
+            
+            elExplanationText.innerText = text;
+
+            // Center the panel
+            elExplanationPanel.style.left = '50%';
+            elExplanationPanel.style.top = '50%';
+            elExplanationPanel.style.transform = 'translate(-50%, -50%)';
+        }
+
+        document.getElementById('btn-next').addEventListener('click', () => {
+            elExplanationPanel.classList.add('hidden');
+            currentQuestionIndex++;
+            gameState = 'playing';
+            loadQuestion(currentQuestionIndex);
+        });
+
+        function updateScoreDisplay() {
+            elScore.innerText = score;
+        }
+
+        function endGame() {
+            gameState = 'end';
+            elTopBar.classList.add('hidden');
+            elQuestionPanel.classList.add('hidden');
+            elEndScreen.classList.remove('hidden');
+            
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('final-correct').innerText = correctAnswers;
+            document.getElementById('final-wrong').innerText = wrongAnswers;
+
+            let msg = "";
+            if (score === 50) msg = "Sempurna! Kamu adalah pahlawan lingkungan sejati di industri perhotelan!";
+            else if (score >= 30) msg = "Luar biasa! Pengetahuanmu tentang Green Hotel sangat bagus.";
+            else msg = "Terus belajar! Praktik ramah lingkungan sangat penting untuk masa depan pariwisata.";
+            
+            document.getElementById('motivation-msg').innerText = `"${msg}"`;
+        }
+
+        // Particle System for Explosion (Canvas 2D overlay for performance over 3D particles)
+        const ctx = document.getElementById('particle-canvas').getContext('2d');
+        let particles = [];
+
+        function resizeParticleCanvas() {
+            const canvas = document.getElementById('particle-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeParticleCanvas);
+        resizeParticleCanvas();
+
+        function createExplosion(pos3D, color) {
+            // Project 3D position to 2D screen coordinates
+            const vector = pos3D.clone();
+            vector.project(camera);
+            
+            const x = (vector.x * .5 + .5) * window.innerWidth;
+            const y = (-(vector.y * .5) + .5) * window.innerHeight;
+
+            const colorHex = '#' + color.getHexString();
+
+            for (let i = 0; i < 30; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    radius: Math.random() * 5 + 2,
+                    color: colorHex,
+                    life: 1,
+                    decay: Math.random() * 0.05 + 0.02
+                });
+            }
+        }
+
+        function updateParticles() {
+            ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.2; // Gravity
+                p.life -= p.decay;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = p.color;
+                    ctx.globalAlpha = p.life;
+                    ctx.fill();
+                }
+            }
+            ctx.globalAlpha = 1;
+        }
+
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            const timeDelta = time - lastTime;
+            lastTime = time;
+
+            // Animate Decorative Objects
+            decorativeObjects.forEach(obj => {
+                obj.mesh.rotation.y += obj.rotSpeed;
+                obj.mesh.position.y = obj.floatY + Math.sin(time * 0.002) * 0.2;
+            });
+
+            // Game Logic Updates
+            if (gameState === 'playing') {
+                checkCollisions();
+
+                // Update Balloons
+                balloons.forEach((b, index) => {
+                    // Float up
+                    b.mesh.position.y += b.speedY;
+                    // Wobble side to side
+                    b.mesh.position.x = b.baseX + Math.sin(time * 0.001 * b.wobbleSpeed + b.wobbleOffset) * 0.5;
+
+                    // Project 3D position to 2D for HTML Label
+                    const vector = b.mesh.position.clone();
+                    vector.y += 1.5; // Offset label to be above the balloon
+                    vector.project(camera);
+                    
+                    const x = (vector.x * .5 + .5) * window.innerWidth;
+                    const y = (-(vector.y * .5) + .5) * window.innerHeight;
+                    
+                    b.label.style.left = `${x}px`;
+                    b.label.style.top = `${y}px`;
+
+                    // Reset if floating too high
+                    if (b.mesh.position.y > 8) {
+                        b.mesh.position.y = -6;
+                        b.mesh.position.x = b.baseX;
+                    }
+                });
+            }
+
+            updateParticles();
+            renderer.render(scene, camera);
+        }
+
+        // Initialize Everything
+        window.onload = () => {
+            initThreeJS();
+            initMediaPipe();
+            
+            // Button Fallbacks for mouse users
+            btnStart.addEventListener('click', startGame);
+            document.getElementById('btn-resume').addEventListener('click', resumeGame);
+            
+            // Allow mouse click for testing if hand tracking fails
+            window.addEventListener('click', (e) => {
+                if(gameState === 'playing') {
+                    handPosition.x = e.clientX;
+                    handPosition.y = e.clientY;
+                    currentGesture = 'pointing'; // simulate pointing
+                    checkCollisions();
+                    // reset slightly after
+                    setTimeout(()=> { currentGesture = 'none'; }, 100);
+                }
+            });
+        };
+
+    </script>
+</body>
+</html>
